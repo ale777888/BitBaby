@@ -109,6 +109,27 @@ function normalizeStatusFromText(v){
 
   return 'hit';
 }
+function normalizePair(v){
+  let s = String(v ?? '').trim().toUpperCase();
+
+  // 允许用户只输入 BTC
+  if(!s) return '/USDT';
+
+  // 去掉多余空格：BTC / USDT -> BTC/USDT
+  s = s.replace(/\s*/g, '').replace(/\/+/g, '/');
+
+  // 如果没有 / ，自动补 /USDT
+  if(!s.includes('/')){
+    return `${s}/USDT`;
+  }
+
+  // 如果用户只剩下 /USDT 或者以 / 开头，保持
+  if(s.startsWith('/')) return s;
+
+  return s;
+}
+
+
 
 function splitBulkCols(line){
   return String(line ?? '')
@@ -135,7 +156,7 @@ function parseBulkRows(text){
     if(cols.length < 3){
       throw new Error(`第 ${i+1} 行列数不足（至少需要：交易对/币种、金额、收益）`);
     }
-    const pair = cols[0];
+    const pair = normalizePair(cols[0]);
     const amount = cols[1];
     const profit = cols[2];
     const status = normalizeStatusFromText(cols[3]);
@@ -152,11 +173,11 @@ function applyBulkToTable(rows){
     refreshTotals();
     return;
   }
-  rows.forEach(r => tbody.appendChild(rowTemplate(r)));
+  rows.forEach(r => { r.pair = normalizePair(r.pair); tbody.appendChild(rowTemplate(r)); });
   refreshTotals();
 }
 function rowTemplate(data = {}){
-  const { pair='', amount='', profit='', status='hit' } = data;
+  const { pair='/USDT', amount='', profit='', status='hit' } = data;
 
   const tr = document.createElement('tr');
   tr.innerHTML = `
@@ -175,6 +196,23 @@ function rowTemplate(data = {}){
       <button class="btn small danger del-btn" tabindex="-1">×</button>
     </td>
   `;
+
+const pairEl = tr.querySelector('.pair-input');
+if(pairEl){
+  // 初始空值时保持 /USDT
+  if(!pairEl.value.trim()) pairEl.value = '/USDT';
+
+  pairEl.addEventListener('focus', () => {
+    // 让用户直接在最前面输入 BTC
+    if(pairEl.value.trim().toUpperCase() === '/USDT'){
+      pairEl.setSelectionRange(0, 0);
+    }
+  });
+
+  pairEl.addEventListener('blur', () => {
+    pairEl.value = normalizePair(pairEl.value);
+  });
+}
 
   const sel = tr.querySelector('.status-input');
   applyStatusClass(sel);
@@ -349,7 +387,7 @@ async function savePNG(){
 
 function autoSave(){
   const rows = [...document.querySelectorAll('#tbody tr')].map(r=>({
-    pair: r.querySelector('.pair-input')?.value || '',
+    pair: normalizePair(r.querySelector('.pair-input')?.value || ''),
     amount: r.querySelector('.amount-input')?.value || '',
     profit: r.querySelector('.profit-input')?.value || '',
     status: r.querySelector('.status-input')?.value || 'hit'
