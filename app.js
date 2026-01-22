@@ -89,6 +89,72 @@ function escapeHTML(v){
     .replace(/'/g, '&#39;');
 }
 
+
+
+// === 批量粘贴解析（Excel/表格复制） ===
+// 支持：Tab / 多空格 / 逗号 分列；允许首行表头（包含“交易对/币种/金额/收益/状态”会自动跳过）
+// 列顺序：交易对/币种, 金额(USDT), 收益, 状态(可选；默认“达到预计收益”)
+function normalizeStatusFromText(v){
+  const s = String(v ?? '').trim();
+  if(!s) return 'hit';
+
+  // 允许直接给 key
+  if (STATUS[s]) return s;
+
+  // 允许中文
+  if (s.includes('达到')) return 'hit';
+  if (s.includes('进行')) return 'progress';
+  if (s.includes('未达到') || s.includes('未达')) return 'miss';
+  if (s.includes('超额')) return 'over';
+
+  return 'hit';
+}
+
+function splitBulkCols(line){
+  return String(line ?? '')
+    .trim()
+    .split(/[\t,]+|\s+/)
+    .map(x => x.trim())
+    .filter(Boolean);
+}
+
+function parseBulkRows(text){
+  const raw = String(text ?? '').replace(/\r/g, '\n');
+  const lines = raw.split('\n').map(l => l.trim()).filter(Boolean);
+  if(!lines.length) return [];
+
+  let start = 0;
+  const head = splitBulkCols(lines[0]).join('');
+  if(head.includes('交易对') || head.includes('币种') || head.includes('金额') || head.includes('收益') || head.includes('状态')){
+    start = 1;
+  }
+
+  const out = [];
+  for(let i=start;i<lines.length;i++){
+    const cols = splitBulkCols(lines[i]);
+    if(cols.length < 3){
+      throw new Error(`第 ${i+1} 行列数不足（至少需要：交易对/币种、金额、收益）`);
+    }
+    const pair = cols[0];
+    const amount = cols[1];
+    const profit = cols[2];
+    const status = normalizeStatusFromText(cols[3]);
+    out.push({ pair, amount, profit, status });
+  }
+  return out;
+}
+
+function applyBulkToTable(rows){
+  const tbody = document.getElementById('tbody');
+  tbody.innerHTML = '';
+  if(!rows.length){
+    tbody.appendChild(rowTemplate({ status:'hit' }));
+    refreshTotals();
+    return;
+  }
+  rows.forEach(r => tbody.appendChild(rowTemplate(r)));
+  refreshTotals();
+}
 function rowTemplate(data = {}){
   const { pair='', amount='', profit='', status='hit' } = data;
 
@@ -181,11 +247,25 @@ function bindEvents(){
     refreshTotals();
   });
 
-  document.getElementById('resetDemo').addEventListener('click', ()=>{
-    if(confirm('重置数据？')) loadDemo();
-  });
+  // 批量解析
+  const parseBtn = document.getElementById('parseBulk');
+  const clearBtn = document.getElementById('clearBulk');
+  const bulkInput = document.getElementById('bulkInput');
 
-  document.getElementById('exportCSV').addEventListener('click', exportCSV);
+  if(parseBtn && bulkInput){
+    parseBtn.addEventListener('click', ()=>{
+      try{
+        const rows = parseBulkRows(bulkInput.value);
+        applyBulkToTable(rows);
+      }catch(err){
+        alert(err?.message || String(err));
+      }
+    });
+  }
+  if(clearBtn && bulkInput){
+    clearBtn.addEventListener('click', ()=>{ bulkInput.value=''; bulkInput.focus(); });
+  }
+  });
   document.getElementById('savePNG').addEventListener('click', savePNG);
   document.getElementById('tradeDate').addEventListener('input', debouncedAutoSave);
 }
@@ -266,43 +346,7 @@ async function savePNG(){
   }
 }
 
-// === Bug Fix #2：CSV 导出标准转义（不改变按钮/流程/文件名） ===
-function csvEscape(v){
-  const s = String(v ?? '');
-  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-}
 
-function exportCSV(){
-  const rows = [...document.querySelectorAll('#tbody tr')].map(r => {
-    return [...r.querySelectorAll('input, select')].map(i => i.value);
-  });
-
-  const header = ["Pair","Amount","L1","L2","L3","Profit","Status"];
-  const lines = [
-    header.map(csvEscape).join(","),
-    ...rows.map(cols => cols.map(csvEscape).join(","))
-  ].join("\n");
-
-  const csvContent = "data:text/csv;charset=utf-8," + encodeURIComponent(lines);
-  const link = document.createElement("a");
-  link.setAttribute("href", csvContent);
-  link.setAttribute("download", "data.csv");
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-}
-
-function loadDemo(){
-  const demo = [
-    {pair:'ETH/USDT', amount:'5000', profit:'', status:'hit'},
-    {pair:'SOL/USDT', amount:'1200', profit:'', status:'over'},
-    {pair:'DOGE/USDT',amount:'800',  profit:'', status:'miss'},
-  ];
-  const tbody = document.getElementById('tbody');
-  tbody.innerHTML = '';
-  demo.forEach(d => tbody.appendChild(rowTemplate(d)));
-  refreshTotals();
-}
 
 function autoSave(){
   const rows = [...document.querySelectorAll('#tbody tr')].map(r=>({
@@ -338,10 +382,17 @@ function init(){
 
       refreshTotals();
     }catch(e){
-      loadDemo();
+      const tbody = document.getElementById('tbody');
+      tbody.innerHTML = '';
+      tbody.appendChild(rowTemplate({ status:'hit' }));
+      refreshTotals();
     }
-  } else {
-    loadDemo();
+  }
+  else {
+      const tbody = document.getElementById('tbody');
+      tbody.innerHTML = '';
+      tbody.appendChild(rowTemplate({ status:'hit' }));
+      refreshTotals();
   }
 }
 
